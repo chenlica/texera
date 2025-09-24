@@ -20,47 +20,43 @@
 package edu.uci.ics.amber.operator.sort
 
 import com.fasterxml.jackson.annotation.{JsonProperty, JsonPropertyDescription}
-import edu.uci.ics.amber.core.tuple.Schema
-import edu.uci.ics.amber.core.workflow.{InputPort, OutputPort, PortIdentity}
-import edu.uci.ics.amber.operator.PythonOperatorDescriptor
+import edu.uci.ics.amber.core.executor.OpExecWithClassName
+import edu.uci.ics.amber.core.virtualidentity.{ExecutionIdentity, WorkflowIdentity}
+import edu.uci.ics.amber.core.workflow._
+import edu.uci.ics.amber.operator.LogicalOp
 import edu.uci.ics.amber.operator.metadata.{OperatorGroupConstants, OperatorInfo}
-class SortOpDesc extends PythonOperatorDescriptor {
+import edu.uci.ics.amber.util.JSONUtils.objectMapper
+
+class SortOpDesc extends LogicalOp {
+
   @JsonProperty(required = true)
   @JsonPropertyDescription("column to perform sorting on")
-  var attributes: List[SortCriteriaUnit] = _
+  var attributes: List[SortCriteriaUnit] = List()
 
-  override def generatePythonCode(): String = {
-    val attributeName = "[" + attributes
-      .map { criteria =>
-        s""""${criteria.attributeName}""""
-      }
-      .mkString(", ") + "]"
-    val sortOrders: String = "[" + attributes
-      .map { criteria =>
-        criteria.sortPreference match {
-          case SortPreference.ASC  => "True"
-          case SortPreference.DESC => "False"
-        }
-      }
-      .mkString(", ") + "]"
-
-    s"""from pytexera import *
-       |import pandas as pd
-       |from datetime import datetime
-       |
-       |class ProcessTableOperator(UDFTableOperator):
-       |
-       |    @overrides
-       |    def process_table(self, table: Table, port: int) -> Iterator[Optional[TableLike]]:
-       |        sort_columns = $attributeName
-       |        ascending_orders = $sortOrders
-       |
-       |        sorted_df = table.sort_values(by=sort_columns, ascending=ascending_orders)
-       |        yield sorted_df""".stripMargin
-  }
-
-  def getOutputSchemas(inputSchemas: Map[PortIdentity, Schema]): Map[PortIdentity, Schema] = {
-    Map(operatorInfo.outputPorts.head.id -> inputSchemas.values.head)
+  override def getPhysicalOp(
+      workflowId: WorkflowIdentity,
+      executionId: ExecutionIdentity
+  ): PhysicalOp = {
+    PhysicalOp
+      .oneToOnePhysicalOp(
+        workflowId,
+        executionId,
+        operatorIdentifier,
+        OpExecWithClassName(
+          "edu.uci.ics.amber.operator.sort.SortOpExec",
+          objectMapper.writeValueAsString(this)
+        )
+      )
+      .withInputPorts(operatorInfo.inputPorts)
+      .withOutputPorts(operatorInfo.outputPorts)
+      .withParallelizable(false)
+      .withPropagateSchema(
+        SchemaPropagationFunc(inputSchemas => {
+          require(inputSchemas.size == 1, "Sort operator expects exactly one input port")
+          val outputSchema = inputSchemas.values.head
+          Map(operatorInfo.outputPorts.head.id -> outputSchema)
+        })
+      )
   }
 
   override def operatorInfo: OperatorInfo =
